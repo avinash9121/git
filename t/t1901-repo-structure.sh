@@ -4,42 +4,92 @@ test_description='test git repo structure'
 
 . ./test-lib.sh
 
+strip_object_disk_usage() {
+	awk '
+		/^\|   \* Disk size/ { skip=1; next }
+		skip && /^\|     \* / { next }
+		skip && !/^\|     \* / { skip=0 }
+		{ print }
+	' $1
+}
+
 test_expect_success 'empty repository' '
 	test_when_finished "rm -rf repo" &&
 	git init repo &&
 	(
 		cd repo &&
 		cat >expect <<-\EOF &&
-		| Repository structure | Value |
-		| -------------------- | ----- |
-		| * References         |       |
-		|   * Count            |     0 |
-		|     * Branches       |     0 |
-		|     * Tags           |     0 |
-		|     * Remotes        |     0 |
-		|     * Others         |     0 |
-		|                      |       |
-		| * Reachable objects  |       |
-		|   * Count            |     0 |
-		|     * Commits        |     0 |
-		|     * Trees          |     0 |
-		|     * Blobs          |     0 |
-		|     * Tags           |     0 |
+		| Repository structure | Value  |
+		| -------------------- | ------ |
+		| * References         |        |
+		|   * Count            |    0   |
+		|     * Branches       |    0   |
+		|     * Tags           |    0   |
+		|     * Remotes        |    0   |
+		|     * Others         |    0   |
+		|                      |        |
+		| * Reachable objects  |        |
+		|   * Count            |    0   |
+		|     * Commits        |    0   |
+		|     * Trees          |    0   |
+		|     * Blobs          |    0   |
+		|     * Tags           |    0   |
+		|   * Inflated size    |    0 B |
+		|     * Commits        |    0 B |
+		|     * Trees          |    0 B |
+		|     * Blobs          |    0 B |
+		|     * Tags           |    0 B |
+		|   * Disk size        |    0 B |
+		|     * Commits        |    0 B |
+		|     * Trees          |    0 B |
+		|     * Blobs          |    0 B |
+		|     * Tags           |    0 B |
 		EOF
 
 		git repo structure >out 2>err &&
 
 		test_cmp expect out &&
+		test_line_count = 0 err &&
+
+		cat >expect <<-\EOF &&
+		references.branches.count=0
+		references.tags.count=0
+		references.remotes.count=0
+		references.others.count=0
+		objects.commits.count=0
+		objects.trees.count=0
+		objects.blobs.count=0
+		objects.tags.count=0
+		objects.commits.inflated=0
+		objects.trees.inflated=0
+		objects.blobs.inflated=0
+		objects.tags.inflated=0
+		objects.commits.disk=0
+		objects.trees.disk=0
+		objects.blobs.disk=0
+		objects.tags.disk=0
+		EOF
+
+		git repo structure --format=keyvalue >out 2>err &&
+
+		test_cmp expect out &&
+		test_line_count = 0 err &&
+
+		# Replace key and value delimiters for nul format.
+		tr "\n=" "\0\n" <expect >expect_nul &&
+		git repo structure --format=nul >out 2>err &&
+
+		test_cmp expect_nul out &&
 		test_line_count = 0 err
 	)
 '
 
-test_expect_success 'repository with references and objects' '
+test_expect_success SHA1 'repository with references and objects' '
 	test_when_finished "rm -rf repo" &&
 	git init repo &&
 	(
 		cd repo &&
-		test_commit_bulk 42 &&
+		test_commit_bulk 1005 &&
 		git tag -a foo -m bar &&
 
 		oid="$(git rev-parse HEAD)" &&
@@ -49,31 +99,39 @@ test_expect_success 'repository with references and objects' '
 		git notes add -m foo &&
 
 		cat >expect <<-\EOF &&
-		| Repository structure | Value |
-		| -------------------- | ----- |
-		| * References         |       |
-		|   * Count            |     4 |
-		|     * Branches       |     1 |
-		|     * Tags           |     1 |
-		|     * Remotes        |     1 |
-		|     * Others         |     1 |
-		|                      |       |
-		| * Reachable objects  |       |
-		|   * Count            |   130 |
-		|     * Commits        |    43 |
-		|     * Trees          |    43 |
-		|     * Blobs          |    43 |
-		|     * Tags           |     1 |
+		| Repository structure | Value      |
+		| -------------------- | ---------- |
+		| * References         |            |
+		|   * Count            |      4     |
+		|     * Branches       |      1     |
+		|     * Tags           |      1     |
+		|     * Remotes        |      1     |
+		|     * Others         |      1     |
+		|                      |            |
+		| * Reachable objects  |            |
+		|   * Count            |   3.02 k   |
+		|     * Commits        |   1.01 k   |
+		|     * Trees          |   1.01 k   |
+		|     * Blobs          |   1.01 k   |
+		|     * Tags           |      1     |
+		|   * Inflated size    |  16.03 MiB |
+		|     * Commits        | 217.92 KiB |
+		|     * Trees          |  15.81 MiB |
+		|     * Blobs          |  11.68 KiB |
+		|     * Tags           |    132 B   |
 		EOF
 
-		git repo structure >out 2>err &&
+		git repo structure >out.raw 2>err &&
+
+		# Skip object disk sizes due to platform variance.
+		strip_object_disk_usage out.raw >out &&
 
 		test_cmp expect out &&
 		test_line_count = 0 err
 	)
 '
 
-test_expect_success 'keyvalue and nul format' '
+test_expect_success SHA1 'keyvalue format' '
 	test_when_finished "rm -rf repo" &&
 	git init repo &&
 	(
@@ -90,25 +148,29 @@ test_expect_success 'keyvalue and nul format' '
 		objects.trees.count=42
 		objects.blobs.count=42
 		objects.tags.count=1
+		objects.commits.inflated=9225
+		objects.trees.inflated=28554
+		objects.blobs.inflated=453
+		objects.tags.inflated=132
 		EOF
 
-		git repo structure --format=keyvalue >out 2>err &&
+		git repo structure --format=keyvalue >out.raw 2>err &&
+
+		# Strip object disk usage from output due to platform variance.
+		grep -v "objects\..*\.disk=" out.raw >out &&
 
 		test_cmp expect out &&
 		test_line_count = 0 err &&
 
-		# Replace key and value delimiters for nul format.
-		tr "\n=" "\0\n" <expect >expect_nul &&
-		git repo structure --format=nul >out 2>err &&
-
-		test_cmp expect_nul out &&
-		test_line_count = 0 err &&
-
 		# "-z", as a synonym to "--format=nul", participates in the
 		# usual "last one wins" rule.
-		git repo structure --format=table -z >out 2>err &&
+		git repo structure --format=table -z >out.raw 2>err &&
 
-		test_cmp expect_nul out &&
+		# Replace key and value delimiters for nul format.
+		tr "\0\n" "\n=" <out.raw |
+		grep -v "objects\..*\.disk=" >out &&
+
+		test_cmp expect out &&
 		test_line_count = 0 err
 	)
 '
